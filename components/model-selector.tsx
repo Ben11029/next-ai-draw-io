@@ -1,6 +1,13 @@
 "use client"
 
-import { Bot, Check, ChevronDown, Server, Settings2 } from "lucide-react"
+import {
+    AlertTriangle,
+    Bot,
+    Check,
+    ChevronDown,
+    Server,
+    Settings2,
+} from "lucide-react"
 import { useMemo, useState } from "react"
 import {
     ModelSelectorContent,
@@ -16,6 +23,7 @@ import {
     ModelSelectorTrigger,
 } from "@/components/ai-elements/model-selector"
 import { ButtonWithTooltip } from "@/components/button-with-tooltip"
+import { useDictionary } from "@/hooks/use-dictionary"
 import type { FlattenedModel } from "@/lib/types/model-config"
 import { cn } from "@/lib/utils"
 
@@ -25,6 +33,7 @@ interface ModelSelectorProps {
     onSelect: (modelId: string | undefined) => void
     onConfigure: () => void
     disabled?: boolean
+    showUnvalidatedModels?: boolean
 }
 
 // Map our provider names to models.dev logo names
@@ -66,16 +75,20 @@ export function ModelSelector({
     onSelect,
     onConfigure,
     disabled = false,
+    showUnvalidatedModels = false,
 }: ModelSelectorProps) {
+    const dict = useDictionary()
     const [open, setOpen] = useState(false)
-    // Only show validated models in the selector
-    const validatedModels = useMemo(
-        () => models.filter((m) => m.validated === true),
-        [models],
-    )
+    // Filter models based on showUnvalidatedModels setting
+    const displayModels = useMemo(() => {
+        if (showUnvalidatedModels) {
+            return models
+        }
+        return models.filter((m) => m.validated === true)
+    }, [models, showUnvalidatedModels])
     const groupedModels = useMemo(
-        () => groupModelsByProvider(validatedModels),
-        [validatedModels],
+        () => groupModelsByProvider(displayModels),
+        [displayModels],
     )
 
     // Find selected model for display
@@ -96,8 +109,8 @@ export function ModelSelector({
     }
 
     const tooltipContent = selectedModel
-        ? `${selectedModel.modelId} (click to change)`
-        : "Using server default model (click to change)"
+        ? `${selectedModel.modelId} ${dict.modelConfig.clickToChange}`
+        : `${dict.modelConfig.usingServerDefault} ${dict.modelConfig.clickToChange}`
 
     return (
         <ModelSelectorRoot open={open} onOpenChange={setOpen}>
@@ -111,22 +124,26 @@ export function ModelSelector({
                 >
                     <Bot className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
                     <span className="text-xs truncate">
-                        {selectedModel ? selectedModel.modelId : "Default"}
+                        {selectedModel
+                            ? selectedModel.modelId
+                            : dict.modelConfig.default}
                     </span>
                     <ChevronDown className="h-3 w-3 flex-shrink-0 text-muted-foreground" />
                 </ButtonWithTooltip>
             </ModelSelectorTrigger>
-            <ModelSelectorContent title="Select Model">
-                <ModelSelectorInput placeholder="Search models..." />
-                <ModelSelectorList>
+            <ModelSelectorContent title={dict.modelConfig.selectModel}>
+                <ModelSelectorInput
+                    placeholder={dict.modelConfig.searchModels}
+                />
+                <ModelSelectorList className="[&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
                     <ModelSelectorEmpty>
-                        {validatedModels.length === 0 && models.length > 0
-                            ? "No verified models. Test your models first."
-                            : "No models found."}
+                        {displayModels.length === 0 && models.length > 0
+                            ? dict.modelConfig.noVerifiedModels
+                            : dict.modelConfig.noModelsFound}
                     </ModelSelectorEmpty>
 
                     {/* Server Default Option */}
-                    <ModelSelectorGroup heading="Default">
+                    <ModelSelectorGroup heading={dict.modelConfig.default}>
                         <ModelSelectorItem
                             value="__server_default__"
                             onSelect={handleSelect}
@@ -145,7 +162,7 @@ export function ModelSelector({
                             />
                             <Server className="mr-2 h-4 w-4 text-muted-foreground" />
                             <ModelSelectorName>
-                                Server Default
+                                {dict.modelConfig.serverDefault}
                             </ModelSelectorName>
                         </ModelSelectorItem>
                     </ModelSelectorGroup>
@@ -185,6 +202,16 @@ export function ModelSelector({
                                         <ModelSelectorName>
                                             {model.modelId}
                                         </ModelSelectorName>
+                                        {model.validated !== true && (
+                                            <span
+                                                title={
+                                                    dict.modelConfig
+                                                        .unvalidatedModelWarning
+                                                }
+                                            >
+                                                <AlertTriangle className="ml-auto h-3 w-3 text-warning" />
+                                            </span>
+                                        )}
                                     </ModelSelectorItem>
                                 ))}
                             </ModelSelectorGroup>
@@ -201,13 +228,15 @@ export function ModelSelector({
                         >
                             <Settings2 className="mr-2 h-4 w-4" />
                             <ModelSelectorName>
-                                Configure Models...
+                                {dict.modelConfig.configureModels}
                             </ModelSelectorName>
                         </ModelSelectorItem>
                     </ModelSelectorGroup>
                     {/* Info text */}
                     <div className="px-3 py-2 text-xs text-muted-foreground border-t">
-                        Only verified models are shown
+                        {showUnvalidatedModels
+                            ? dict.modelConfig.allModelsShown
+                            : dict.modelConfig.onlyVerifiedShown}
                     </div>
                 </ModelSelectorList>
             </ModelSelectorContent>

@@ -95,8 +95,8 @@ function parseIntSafe(
  * Supports various AI SDK providers with their unique configuration options
  *
  * Environment variables:
- * - OPENAI_REASONING_EFFORT: OpenAI reasoning effort level (minimal/low/medium/high) - for o1/o3/gpt-5
- * - OPENAI_REASONING_SUMMARY: OpenAI reasoning summary (none/brief/detailed) - auto-enabled for o1/o3/gpt-5
+ * - OPENAI_REASONING_EFFORT: OpenAI reasoning effort level (minimal/low/medium/high) - for o1/o3/o4/gpt-5
+ * - OPENAI_REASONING_SUMMARY: OpenAI reasoning summary (auto/detailed) - auto-enabled for o1/o3/o4/gpt-5
  * - ANTHROPIC_THINKING_BUDGET_TOKENS: Anthropic thinking budget in tokens (1024-64000)
  * - ANTHROPIC_THINKING_TYPE: Anthropic thinking type (enabled)
  * - GOOGLE_THINKING_BUDGET: Google Gemini 2.5 thinking budget in tokens (1024-100000)
@@ -118,18 +118,19 @@ function buildProviderOptions(
             const reasoningEffort = process.env.OPENAI_REASONING_EFFORT
             const reasoningSummary = process.env.OPENAI_REASONING_SUMMARY
 
-            // OpenAI reasoning models (o1, o3, gpt-5) need reasoningSummary to return thoughts
+            // OpenAI reasoning models (o1, o3, o4, gpt-5) need reasoningSummary to return thoughts
             if (
                 modelId &&
                 (modelId.includes("o1") ||
                     modelId.includes("o3") ||
+                    modelId.includes("o4") ||
                     modelId.includes("gpt-5"))
             ) {
                 options.openai = {
-                    // Auto-enable reasoning summary for reasoning models (default: detailed)
+                    // Auto-enable reasoning summary for reasoning models
+                    // Use 'auto' as default since not all models support 'detailed'
                     reasoningSummary:
-                        (reasoningSummary as "none" | "brief" | "detailed") ||
-                        "detailed",
+                        (reasoningSummary as "auto" | "detailed") || "auto",
                 }
 
                 // Optionally configure reasoning effort
@@ -152,8 +153,7 @@ function buildProviderOptions(
                 }
                 if (reasoningSummary) {
                     options.openai.reasoningSummary = reasoningSummary as
-                        | "none"
-                        | "brief"
+                        | "auto"
                         | "detailed"
                 }
             }
@@ -588,12 +588,16 @@ export function getAIModel(overrides?: ClientOverrides): ModelConfig {
         case "openai": {
             const apiKey = overrides?.apiKey || process.env.OPENAI_API_KEY
             const baseURL = overrides?.baseUrl || process.env.OPENAI_BASE_URL
-            if (baseURL || overrides?.apiKey) {
-                const customOpenAI = createOpenAI({
-                    apiKey,
-                    ...(baseURL && { baseURL }),
-                })
+            if (baseURL) {
+                // Custom base URL = third-party proxy, use Chat Completions API
+                // for compatibility (most proxies don't support /responses endpoint)
+                const customOpenAI = createOpenAI({ apiKey, baseURL })
                 model = customOpenAI.chat(modelId)
+            } else if (overrides?.apiKey) {
+                // Custom API key but official OpenAI endpoint, use Responses API
+                // to support reasoning for gpt-5, o1, o3, o4 models
+                const customOpenAI = createOpenAI({ apiKey })
+                model = customOpenAI(modelId)
             } else {
                 model = openai(modelId)
             }
