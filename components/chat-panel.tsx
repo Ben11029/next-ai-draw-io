@@ -3,39 +3,38 @@
 import { useChat } from "@ai-sdk/react"
 import { DefaultChatTransport } from "ai"
 import {
-    AlertTriangle,
     MessageSquarePlus,
     PanelRightClose,
     PanelRightOpen,
     Settings,
 } from "lucide-react"
 import Image from "next/image"
-import Link from "next/link"
 import type React from "react"
-import { useCallback, useEffect, useRef, useState } from "react"
+import {
+    useCallback,
+    useEffect,
+    useLayoutEffect,
+    useRef,
+    useState,
+} from "react"
 import { flushSync } from "react-dom"
-import { FaGithub } from "react-icons/fa"
 import { Toaster, toast } from "sonner"
 import { ButtonWithTooltip } from "@/components/button-with-tooltip"
 import { ChatInput } from "@/components/chat-input"
 import { ModelConfigDialog } from "@/components/model-config-dialog"
 import { ResetWarningModal } from "@/components/reset-warning-modal"
 import { SettingsDialog } from "@/components/settings-dialog"
-import {
-    Tooltip,
-    TooltipContent,
-    TooltipTrigger,
-} from "@/components/ui/tooltip"
 import { useDiagram } from "@/contexts/diagram-context"
 import { useDiagramToolHandlers } from "@/hooks/use-diagram-tool-handlers"
 import { useDictionary } from "@/hooks/use-dictionary"
 import { getSelectedAIConfig, useModelConfig } from "@/hooks/use-model-config"
 import { getApiEndpoint } from "@/lib/base-path"
 import { findCachedResponse } from "@/lib/cached-responses"
+import { formatMessage } from "@/lib/i18n/utils"
 import { isPdfFile, isTextFile } from "@/lib/pdf-utils"
 import { type FileData, useFileProcessor } from "@/lib/use-file-processor"
 import { useQuotaManager } from "@/lib/use-quota-manager"
-import { formatXML } from "@/lib/utils"
+import { cn, formatXML } from "@/lib/utils"
 import { ChatMessageDisplay } from "./chat-message-display"
 import { DevXmlSimulator } from "./dev-xml-simulator"
 
@@ -154,7 +153,6 @@ export default function ChatPanel({
     // File processing using extracted hook
     const { files, pdfData, handleFileChange, setFiles } = useFileProcessor()
 
-    const [showHistory, setShowHistory] = useState(false)
     const [showSettingsDialog, setShowSettingsDialog] = useState(false)
     const [showModelConfigDialog, setShowModelConfigDialog] = useState(false)
 
@@ -192,6 +190,7 @@ export default function ChatPanel({
         dailyRequestLimit,
         dailyTokenLimit,
         tpmLimit,
+        onConfigModel: () => setShowModelConfigDialog(true),
     })
 
     // Generate a unique session ID for Langfuse tracing (restore from localStorage if available)
@@ -208,6 +207,18 @@ export default function ChatPanel({
 
     // Flag to track if we've restored from localStorage
     const hasRestoredRef = useRef(false)
+    const [isRestored, setIsRestored] = useState(false)
+
+    // Track previous isVisible to only animate when toggling (not on page load)
+    const prevIsVisibleRef = useRef(isVisible)
+    const [shouldAnimatePanel, setShouldAnimatePanel] = useState(false)
+    useEffect(() => {
+        // Only animate when visibility changes from false to true (not on initial load)
+        if (!prevIsVisibleRef.current && isVisible) {
+            setShouldAnimatePanel(true)
+        }
+        prevIsVisibleRef.current = isVisible
+    }, [isVisible])
 
     // Ref to track latest chartXML for use in callbacks (avoids stale closure)
     const chartXMLRef = useRef(chartXML)
@@ -247,182 +258,185 @@ export default function ChatPanel({
         onExport,
     })
 
-    const {
-        messages,
-        sendMessage,
-        addToolOutput,
-        stop,
-        status,
-        error,
-        setMessages,
-    } = useChat({
-        transport: new DefaultChatTransport({
-            api: getApiEndpoint("/api/chat"),
-        }),
-        onToolCall: async ({ toolCall }) => {
-            await handleToolCall({ toolCall }, addToolOutput)
-        },
-        onError: (error) => {
-            // Handle server-side quota limit (429 response)
-            // AI SDK puts the full response body in error.message for non-OK responses
-            try {
-                const data = JSON.parse(error.message)
-                if (data.type === "request") {
-                    quotaManager.showQuotaLimitToast(data.used, data.limit)
-                    return
-                }
-                if (data.type === "token") {
-                    quotaManager.showTokenLimitToast(data.used, data.limit)
-                    return
-                }
-                if (data.type === "tpm") {
-                    quotaManager.showTPMLimitToast(data.limit)
-                    return
-                }
-            } catch {
-                // Not JSON, fall through to string matching for backwards compatibility
-            }
-
-            // Fallback to string matching
-            if (error.message.includes("Daily request limit")) {
-                quotaManager.showQuotaLimitToast()
-                return
-            }
-            if (error.message.includes("Daily token limit")) {
-                quotaManager.showTokenLimitToast()
-                return
-            }
-            if (
-                error.message.includes("Rate limit exceeded") ||
-                error.message.includes("tokens per minute")
-            ) {
-                quotaManager.showTPMLimitToast()
-                return
-            }
-
-            // Silence access code error in console since it's handled by UI
-            if (!error.message.includes("Invalid or missing access code")) {
-                console.error("Chat error:", error)
-                // Debug: Log messages structure when error occurs
-                console.log("[onError] messages count:", messages.length)
-                messages.forEach((msg, idx) => {
-                    console.log(`[onError] Message ${idx}:`, {
-                        role: msg.role,
-                        partsCount: msg.parts?.length,
-                    })
-                    if (msg.parts) {
-                        msg.parts.forEach((part: any, partIdx: number) => {
-                            console.log(
-                                `[onError]   Part ${partIdx}:`,
-                                JSON.stringify({
-                                    type: part.type,
-                                    toolName: part.toolName,
-                                    hasInput: !!part.input,
-                                    inputType: typeof part.input,
-                                    inputKeys:
-                                        part.input &&
-                                        typeof part.input === "object"
-                                            ? Object.keys(part.input)
-                                            : null,
-                                }),
-                            )
-                        })
+    const { messages, sendMessage, addToolOutput, status, error, setMessages } =
+        useChat({
+            transport: new DefaultChatTransport({
+                api: getApiEndpoint("/api/chat"),
+            }),
+            onToolCall: async ({ toolCall }) => {
+                await handleToolCall({ toolCall }, addToolOutput)
+            },
+            onError: (error) => {
+                // Handle server-side quota limit (429 response)
+                // AI SDK puts the full response body in error.message for non-OK responses
+                try {
+                    const data = JSON.parse(error.message)
+                    if (data.type === "request") {
+                        quotaManager.showQuotaLimitToast(data.used, data.limit)
+                        return
                     }
-                })
-            }
-
-            // Translate technical errors into user-friendly messages
-            // The server now handles detailed error messages, so we can display them directly.
-            // But we still handle connection/network errors that happen before reaching the server.
-            let friendlyMessage = error.message
-
-            // Simple check for network errors if message is generic
-            if (friendlyMessage === "Failed to fetch") {
-                friendlyMessage = "Network error. Please check your connection."
-            }
-
-            // Truncated tool input error (model output limit too low)
-            if (friendlyMessage.includes("toolUse.input is invalid")) {
-                friendlyMessage =
-                    "Output was truncated before the diagram could be generated. Try a simpler request or increase the maxOutputLength."
-            }
-
-            // Translate image not supported error
-            if (friendlyMessage.includes("image content block")) {
-                friendlyMessage = "This model doesn't support image input."
-            }
-
-            // Add system message for error so it can be cleared
-            setMessages((currentMessages) => {
-                const errorMessage = {
-                    id: `error-${Date.now()}`,
-                    role: "system" as const,
-                    content: friendlyMessage,
-                    parts: [{ type: "text" as const, text: friendlyMessage }],
+                    if (data.type === "token") {
+                        quotaManager.showTokenLimitToast(data.used, data.limit)
+                        return
+                    }
+                    if (data.type === "tpm") {
+                        quotaManager.showTPMLimitToast(data.limit)
+                        return
+                    }
+                } catch {
+                    // Not JSON, fall through to string matching for backwards compatibility
                 }
-                return [...currentMessages, errorMessage]
-            })
 
-            if (error.message.includes("Invalid or missing access code")) {
-                // Show settings dialog to help user fix it
-                setShowSettingsDialog(true)
-            }
-        },
-        onFinish: ({ message }) => {
-            // Track actual token usage from server metadata
-            const metadata = message?.metadata as
-                | Record<string, unknown>
-                | undefined
-
-            // DEBUG: Log finish reason to diagnose truncation
-            console.log("[onFinish] finishReason:", metadata?.finishReason)
-        },
-        sendAutomaticallyWhen: ({ messages }) => {
-            const isInContinuationMode = partialXmlRef.current.length > 0
-
-            const shouldRetry = hasToolErrors(
-                messages as unknown as ChatMessage[],
-            )
-
-            if (!shouldRetry) {
-                // No error, reset retry count and clear state
-                autoRetryCountRef.current = 0
-                continuationRetryCountRef.current = 0
-                partialXmlRef.current = ""
-                return false
-            }
-
-            // Continuation mode: limited retries for truncation handling
-            if (isInContinuationMode) {
+                // Fallback to string matching
+                if (error.message.includes("Daily request limit")) {
+                    quotaManager.showQuotaLimitToast()
+                    return
+                }
+                if (error.message.includes("Daily token limit")) {
+                    quotaManager.showTokenLimitToast()
+                    return
+                }
                 if (
-                    continuationRetryCountRef.current >=
-                    MAX_CONTINUATION_RETRY_COUNT
+                    error.message.includes("Rate limit exceeded") ||
+                    error.message.includes("tokens per minute")
                 ) {
-                    toast.error(
-                        `Continuation retry limit reached (${MAX_CONTINUATION_RETRY_COUNT}). The diagram may be too complex.`,
-                    )
+                    quotaManager.showTPMLimitToast()
+                    return
+                }
+
+                // Silence access code error in console since it's handled by UI
+                if (!error.message.includes("Invalid or missing access code")) {
+                    console.error("Chat error:", error)
+                    // Debug: Log messages structure when error occurs
+                    console.log("[onError] messages count:", messages.length)
+                    messages.forEach((msg, idx) => {
+                        console.log(`[onError] Message ${idx}:`, {
+                            role: msg.role,
+                            partsCount: msg.parts?.length,
+                        })
+                        if (msg.parts) {
+                            msg.parts.forEach((part: any, partIdx: number) => {
+                                console.log(
+                                    `[onError]   Part ${partIdx}:`,
+                                    JSON.stringify({
+                                        type: part.type,
+                                        toolName: part.toolName,
+                                        hasInput: !!part.input,
+                                        inputType: typeof part.input,
+                                        inputKeys:
+                                            part.input &&
+                                            typeof part.input === "object"
+                                                ? Object.keys(part.input)
+                                                : null,
+                                    }),
+                                )
+                            })
+                        }
+                    })
+                }
+
+                // Translate technical errors into user-friendly messages
+                // The server now handles detailed error messages, so we can display them directly.
+                // But we still handle connection/network errors that happen before reaching the server.
+                let friendlyMessage = error.message
+
+                // Simple check for network errors if message is generic
+                if (friendlyMessage === "Failed to fetch") {
+                    friendlyMessage =
+                        "Network error. Please check your connection."
+                }
+
+                // Truncated tool input error (model output limit too low)
+                if (friendlyMessage.includes("toolUse.input is invalid")) {
+                    friendlyMessage =
+                        "Output was truncated before the diagram could be generated. Try a simpler request or increase the maxOutputLength."
+                }
+
+                // Translate image not supported error
+                if (
+                    friendlyMessage.includes("image content block") ||
+                    friendlyMessage.toLowerCase().includes("image_url")
+                ) {
+                    friendlyMessage = "This model doesn't support image input."
+                }
+
+                // Add system message for error so it can be cleared
+                setMessages((currentMessages) => {
+                    const errorMessage = {
+                        id: `error-${Date.now()}`,
+                        role: "system" as const,
+                        content: friendlyMessage,
+                        parts: [
+                            { type: "text" as const, text: friendlyMessage },
+                        ],
+                    }
+                    return [...currentMessages, errorMessage]
+                })
+
+                if (error.message.includes("Invalid or missing access code")) {
+                    // Show settings dialog to help user fix it
+                    setShowSettingsDialog(true)
+                }
+            },
+            onFinish: ({ message }) => {
+                // Track actual token usage from server metadata
+                const metadata = message?.metadata as
+                    | Record<string, unknown>
+                    | undefined
+
+                // DEBUG: Log finish reason to diagnose truncation
+                console.log("[onFinish] finishReason:", metadata?.finishReason)
+            },
+            sendAutomaticallyWhen: ({ messages }) => {
+                const isInContinuationMode = partialXmlRef.current.length > 0
+
+                const shouldRetry = hasToolErrors(
+                    messages as unknown as ChatMessage[],
+                )
+
+                if (!shouldRetry) {
+                    // No error, reset retry count and clear state
+                    autoRetryCountRef.current = 0
                     continuationRetryCountRef.current = 0
                     partialXmlRef.current = ""
                     return false
                 }
-                continuationRetryCountRef.current++
-            } else {
-                // Regular error: check retry count limit
-                if (autoRetryCountRef.current >= MAX_AUTO_RETRY_COUNT) {
-                    toast.error(
-                        `Auto-retry limit reached (${MAX_AUTO_RETRY_COUNT}). Please try again manually.`,
-                    )
-                    autoRetryCountRef.current = 0
-                    partialXmlRef.current = ""
-                    return false
-                }
-                // Increment retry count for actual errors
-                autoRetryCountRef.current++
-            }
 
-            return true
-        },
-    })
+                // Continuation mode: limited retries for truncation handling
+                if (isInContinuationMode) {
+                    if (
+                        continuationRetryCountRef.current >=
+                        MAX_CONTINUATION_RETRY_COUNT
+                    ) {
+                        toast.error(
+                            formatMessage(dict.errors.continuationRetryLimit, {
+                                max: MAX_CONTINUATION_RETRY_COUNT,
+                            }),
+                        )
+                        continuationRetryCountRef.current = 0
+                        partialXmlRef.current = ""
+                        return false
+                    }
+                    continuationRetryCountRef.current++
+                } else {
+                    // Regular error: check retry count limit
+                    if (autoRetryCountRef.current >= MAX_AUTO_RETRY_COUNT) {
+                        toast.error(
+                            formatMessage(dict.errors.retryLimit, {
+                                max: MAX_AUTO_RETRY_COUNT,
+                            }),
+                        )
+                        autoRetryCountRef.current = 0
+                        partialXmlRef.current = ""
+                        return false
+                    }
+                    // Increment retry count for actual errors
+                    autoRetryCountRef.current++
+                }
+
+                return true
+            },
+        })
 
     // Ref to track latest messages for unload persistence
     const messagesRef = useRef(messages)
@@ -433,7 +447,8 @@ export default function ChatPanel({
     const messagesEndRef = useRef<HTMLDivElement>(null)
 
     // Restore messages and XML snapshots from localStorage on mount
-    useEffect(() => {
+    // useLayoutEffect runs synchronously before browser paint, so messages appear immediately
+    useLayoutEffect(() => {
         if (hasRestoredRef.current) return
         hasRestoredRef.current = true
 
@@ -460,9 +475,11 @@ export default function ChatPanel({
             // On complete failure, clear storage to allow recovery
             localStorage.removeItem(STORAGE_MESSAGES_KEY)
             localStorage.removeItem(STORAGE_XML_SNAPSHOTS_KEY)
-            toast.error("Session data was corrupted. Starting fresh.")
+            toast.error(dict.errors.sessionCorrupted)
+        } finally {
+            setIsRestored(true)
         }
-    }, [setMessages])
+    }, [setMessages, dict.errors.sessionCorrupted])
 
     // Save messages to localStorage whenever they change (debounced to prevent blocking during streaming)
     useEffect(() => {
@@ -661,12 +678,10 @@ export default function ChatPanel({
             localStorage.removeItem(STORAGE_DIAGRAM_XML_KEY)
             localStorage.setItem(STORAGE_SESSION_ID_KEY, newSessionId)
             sessionStorage.removeItem(SESSION_STORAGE_INPUT_KEY)
-            toast.success("Started a fresh chat")
+            toast.success(dict.dialogs.clearSuccess)
         } catch (error) {
             console.error("Failed to clear localStorage:", error)
-            toast.warning(
-                "Chat cleared but browser storage could not be updated",
-            )
+            toast.warning(dict.errors.storageUpdateFailed)
         }
 
         setShowNewChatDialog(false)
@@ -899,7 +914,7 @@ export default function ChatPanel({
         return (
             <div className="h-full flex flex-col items-center pt-4 bg-card border border-border/30 rounded-xl">
                 <ButtonWithTooltip
-                    tooltipContent="Show chat panel (Ctrl+B)"
+                    tooltipContent={dict.nav.showPanel}
                     variant="ghost"
                     size="icon"
                     onClick={onToggleVisibility}
@@ -911,10 +926,9 @@ export default function ChatPanel({
                     className="text-sm font-medium text-muted-foreground mt-8 tracking-wide"
                     style={{
                         writingMode: "vertical-rl",
-                        transform: "rotate(180deg)",
                     }}
                 >
-                    AI Chat
+                    {dict.nav.aiChat}
                 </div>
             </div>
         )
@@ -922,12 +936,16 @@ export default function ChatPanel({
 
     // Full view
     return (
-        <div className="h-full flex flex-col bg-card shadow-soft animate-slide-in-right rounded-xl border border-border/30 relative">
+        <div
+            className={cn(
+                "h-full flex flex-col bg-card shadow-soft rounded-xl border border-border/30 relative",
+                shouldAnimatePanel && "animate-slide-in-right",
+            )}
+        >
             <Toaster
-                position="bottom-center"
+                position="bottom-left"
                 richColors
                 expand
-                style={{ position: "absolute" }}
                 toastOptions={{
                     style: {
                         maxWidth: "480px",
@@ -943,7 +961,11 @@ export default function ChatPanel({
                     <div className="flex items-center gap-2 overflow-x-hidden">
                         <div className="flex items-center gap-2">
                             <Image
-                                src="/favicon.ico"
+                                src={
+                                    darkMode
+                                        ? "/favicon-white.svg"
+                                        : "/favicon.ico"
+                                }
                                 alt="Next AI Drawio"
                                 width={isMobile ? 24 : 28}
                                 height={isMobile ? 24 : 28}
@@ -955,18 +977,6 @@ export default function ChatPanel({
                                 Next AI Drawio
                             </h1>
                         </div>
-                        {!isMobile &&
-                            process.env.NEXT_PUBLIC_SHOW_ABOUT_AND_NOTICE ===
-                                "true" && (
-                                <Link
-                                    href="/about"
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-sm text-muted-foreground hover:text-foreground transition-colors ml-2"
-                                >
-                                    About
-                                </Link>
-                            )}
                     </div>
                     <div className="flex items-center gap-1 justify-end overflow-visible">
                         <ButtonWithTooltip
@@ -980,23 +990,6 @@ export default function ChatPanel({
                                 className={`${isMobile ? "h-4 w-4" : "h-5 w-5"} text-muted-foreground`}
                             />
                         </ButtonWithTooltip>
-                        <div className="w-px h-5 bg-border mx-1" />
-
-                        <Tooltip>
-                            <TooltipTrigger asChild>
-                                <a
-                                    href="https://github.com/DayuanJiang/next-ai-draw-io"
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-flex items-center justify-center h-9 w-9 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                                >
-                                    <FaGithub
-                                        className={`${isMobile ? "w-4 h-4" : "w-5 h-5"}`}
-                                    />
-                                </a>
-                            </TooltipTrigger>
-                            <TooltipContent>{dict.nav.github}</TooltipContent>
-                        </Tooltip>
 
                         <ButtonWithTooltip
                             tooltipContent={dict.nav.settings}
@@ -1038,6 +1031,7 @@ export default function ChatPanel({
                     onRegenerate={handleRegenerate}
                     status={status}
                     onEditMessage={handleEditMessage}
+                    isRestored={isRestored}
                 />
             </main>
 
@@ -1046,6 +1040,9 @@ export default function ChatPanel({
                 <DevXmlSimulator
                     setMessages={setMessages}
                     onDisplayChart={onDisplayChart}
+                    onShowQuotaToast={() =>
+                        quotaManager.showQuotaLimitToast(50, 50)
+                    }
                 />
             )}
 
@@ -1062,12 +1059,8 @@ export default function ChatPanel({
                     files={files}
                     onFileChange={handleFileChange}
                     pdfData={pdfData}
-                    showHistory={showHistory}
-                    onToggleHistory={setShowHistory}
                     sessionId={sessionId}
                     error={error}
-                    minimalStyle={minimalStyle}
-                    onMinimalStyleChange={setMinimalStyle}
                     models={modelConfig.models}
                     selectedModelId={modelConfig.selectedModelId}
                     onModelSelect={modelConfig.setSelectedModelId}
@@ -1084,6 +1077,8 @@ export default function ChatPanel({
                 onToggleDrawioUi={onToggleDrawioUi}
                 darkMode={darkMode}
                 onToggleDarkMode={onToggleDarkMode}
+                minimalStyle={minimalStyle}
+                onMinimalStyleChange={setMinimalStyle}
             />
 
             <ModelConfigDialog

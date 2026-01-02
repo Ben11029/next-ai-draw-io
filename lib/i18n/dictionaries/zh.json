@@ -46,6 +46,7 @@
         "copyResponse": "复制响应",
         "copied": "已复制！",
         "failedToCopy": "复制失败",
+        "failedToCopyDetail": "复制消息失败。请手动复制或检查剪贴板权限。",
         "goodResponse": "有帮助",
         "badResponse": "无帮助",
         "clickToEdit": "点击编辑",
@@ -98,7 +99,13 @@
         "minimal": "简约",
         "sketch": "草图",
         "closeProtection": "关闭确认",
-        "closeProtectionDescription": "离开页面时显示确认。"
+        "closeProtectionDescription": "离开页面时显示确认。",
+        "diagramStyle": "图表样式",
+        "diagramStyleDescription": "切换简约与精致图表输出模式。",
+        "diagramActions": "图表操作",
+        "diagramActionsDescription": "管理图表历史记录和导出",
+        "history": "历史记录",
+        "download": "下载"
     },
     "save": {
         "title": "保存图表",
@@ -135,6 +142,7 @@
         "invalidAccessCode": "无效或缺少访问码。请在设置中配置。",
         "networkError": "网络错误。请检查您的连接。",
         "retryLimit": "已达到自动重试限制（{max}）。请手动重试。",
+        "continuationRetryLimit": "已达到继续重试限制（{max}）。图表可能过于复杂。",
         "validationFailed": "图表验证失败。请尝试重新生成。",
         "malformedXml": "AI 生成的图表 XML 无效。请尝试重新生成。",
         "failedToProcess": "无法处理图表。请尝试重新生成。",
@@ -143,7 +151,9 @@
         "failedToRestore": "无法从 localStorage 恢复",
         "failedToPersist": "卸载前无法持久化状态",
         "failedToExport": "获取图表数据时出错",
-        "failedToLoadExample": "加载示例图片时出错"
+        "failedToLoadExample": "加载示例图片时出错",
+        "failedToRecordFeedback": "记录您的反馈失败。请重试。",
+        "storageUpdateFailed": "聊天已清除，但无法更新浏览器存储"
     },
     "quota": {
         "dailyLimit": "已达每日配额",
@@ -151,10 +161,12 @@
         "tpmLimit": "速率限制",
         "tpmMessage": "请求过多。请稍等片刻。",
         "tpmMessageDetailed": "达到速率限制（{limit} 令牌/分钟）。请等待 {seconds} 秒后再发送请求。",
-        "messageApi": "糟糕 — 您已达到此演示的每日 API 限制！作为一名独立开发者，我自己承担所有 API 费用，因此必须设置这些限制以保持可持续性。",
-        "messageToken": "糟糕 — 您已达到此演示的每日令牌限制！作为一名独立开发者，我自己承担所有 API 费用，因此必须设置这些限制以保持可持续性。",
+        "messageApi": "看来您今天的体验次数已达上限。非常高兴您玩得开心，虽然本项目由字节跳动豆包慷慨赞助，但为了确保大家都能公平使用，我们不得不对使用量做一点小小的限制。",
+        "messageToken": "看来您今天的 Token 用量已达上限。非常高兴您玩得开心，虽然本项目由字节跳动豆包慷慨赞助，但为了确保大家都能公平使用，我们不得不对使用量做一点小小的限制。",
         "tip": "<strong>提示：</strong>您可以使用自己的 API 密钥（点击设置图标）或自托管项目来绕过这些限制。",
-        "reset": "您的限制将在明天重置。感谢您的理解！",
+        "reset": "您的限制将在明天重置。感谢您的理解。",
+        "doubaoSponsorship": "<a href=\"{link}\" target=\"_blank\" rel=\"noopener noreferrer\" class=\"underline hover:text-foreground\">点击此处注册</a>可获得每个模型 50 万免费 Token（包括豆包、DeepSeek 和 Kimi），然后在模型设置中配置您的 API Key。",
+        "configModel": "使用您的密钥",
         "selfHost": "自托管",
         "sponsor": "赞助",
         "learnMore": "了解更多 →",
@@ -177,6 +189,21 @@
         "thinking": "思考中...",
         "thoughtFor": "思考了 {duration} 秒",
         "thoughtBrief": "思考了几秒钟"
+    },
+    "dev": {
+        "title": "开发：XML 流式模拟器",
+        "preset": "预设：",
+        "selectPreset": "选择预设...",
+        "clear": "清除",
+        "placeholder": "在此粘贴 mxCell XML 或选择预设...",
+        "interval": "间隔：",
+        "chars": "字符：",
+        "streaming": "流式传输中...",
+        "simulate": "模拟",
+        "stop": "停止",
+        "testQuotaToast": "测试配额提示",
+        "simulatingMessage": "[开发] 模拟 XML 流式传输",
+        "successMessage": "成功显示图表。"
     },
     "about": {
         "modelChange": "模型变更与用量限制",
