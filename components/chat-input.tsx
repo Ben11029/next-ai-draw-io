@@ -4,9 +4,9 @@ import {
     Download,
     History,
     Image as ImageIcon,
+    Link,
     Loader2,
     Send,
-    Trash2,
 } from "lucide-react"
 import type React from "react"
 import { useCallback, useEffect, useRef, useState } from "react"
@@ -15,16 +15,17 @@ import { ButtonWithTooltip } from "@/components/button-with-tooltip"
 import { ErrorToast } from "@/components/error-toast"
 import { HistoryDialog } from "@/components/history-dialog"
 import { ModelSelector } from "@/components/model-selector"
-import { ResetWarningModal } from "@/components/reset-warning-modal"
 import { SaveDialog } from "@/components/save-dialog"
 
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
+import { UrlInputDialog } from "@/components/url-input-dialog"
 import { useDiagram } from "@/contexts/diagram-context"
 import { useDictionary } from "@/hooks/use-dictionary"
 import { formatMessage } from "@/lib/i18n/utils"
 import { isPdfFile, isTextFile } from "@/lib/pdf-utils"
 import type { FlattenedModel } from "@/lib/types/model-config"
+import { extractUrlContent, type UrlData } from "@/lib/url-utils"
 import { FilePreviewList } from "./file-preview-list"
 
 const MAX_IMAGE_SIZE = 2 * 1024 * 1024 // 2MB
@@ -140,13 +141,14 @@ interface ChatInputProps {
     status: "submitted" | "streaming" | "ready" | "error"
     onSubmit: (e: React.FormEvent<HTMLFormElement>) => void
     onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void
-    onClearChat: () => void
     files?: File[]
     onFileChange?: (files: File[]) => void
     pdfData?: Map<
         File,
         { text: string; charCount: number; isExtracting: boolean }
     >
+    urlData?: Map<string, UrlData>
+    onUrlChange?: (data: Map<string, UrlData>) => void
 
     sessionId?: string
     error?: Error | null
@@ -163,10 +165,11 @@ export function ChatInput({
     status,
     onSubmit,
     onChange,
-    onClearChat,
     files = [],
     onFileChange = () => {},
     pdfData = new Map(),
+    urlData,
+    onUrlChange,
     sessionId,
     error = null,
     models = [],
@@ -176,14 +179,19 @@ export function ChatInput({
     onConfigureModels = () => {},
 }: ChatInputProps) {
     const dict = useDictionary()
-    const { diagramHistory, saveDiagramToFile } = useDiagram()
+    const {
+        diagramHistory,
+        saveDiagramToFile,
+        showSaveDialog,
+        setShowSaveDialog,
+    } = useDiagram()
 
     const textareaRef = useRef<HTMLTextAreaElement>(null)
     const fileInputRef = useRef<HTMLInputElement>(null)
     const [isDragging, setIsDragging] = useState(false)
-    const [showClearDialog, setShowClearDialog] = useState(false)
     const [showHistory, setShowHistory] = useState(false)
-    const [showSaveDialog, setShowSaveDialog] = useState(false)
+    const [showUrlDialog, setShowUrlDialog] = useState(false)
+    const [isExtractingUrl, setIsExtractingUrl] = useState(false)
     // Allow retry when there's an error (even if status is still "streaming" or "submitted")
     const isDisabled =
         (status === "streaming" || status === "submitted") && !error
@@ -313,9 +321,42 @@ export function ChatInput({
         }
     }
 
-    const handleClear = () => {
-        onClearChat()
-        setShowClearDialog(false)
+    const handleUrlExtract = async (url: string) => {
+        if (!onUrlChange) return
+
+        setIsExtractingUrl(true)
+
+        try {
+            const existing = urlData
+                ? new Map(urlData)
+                : new Map<string, UrlData>()
+            existing.set(url, {
+                url,
+                title: url,
+                content: "",
+                charCount: 0,
+                isExtracting: true,
+            })
+            onUrlChange(existing)
+
+            const data = await extractUrlContent(url)
+
+            const newUrlData = new Map(existing)
+            newUrlData.set(url, data)
+            onUrlChange(newUrlData)
+
+            setShowUrlDialog(false)
+        } catch (error) {
+            showErrorToast(
+                <span className="text-muted-foreground">
+                    {error instanceof Error
+                        ? error.message
+                        : "Failed to extract URL content"}
+                </span>,
+            )
+        } finally {
+            setIsExtractingUrl(false)
+        }
     }
 
     return (
@@ -330,13 +371,23 @@ export function ChatInput({
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
         >
-            {/* File previews */}
-            {files.length > 0 && (
+            {/* File & URL previews */}
+            {(files.length > 0 || (urlData && urlData.size > 0)) && (
                 <div className="mb-3">
                     <FilePreviewList
                         files={files}
                         onRemoveFile={handleRemoveFile}
                         pdfData={pdfData}
+                        urlData={urlData}
+                        onRemoveUrl={
+                            onUrlChange
+                                ? (url) => {
+                                      const next = new Map(urlData)
+                                      next.delete(url)
+                                      onUrlChange(next)
+                                  }
+                                : undefined
+                        }
                     />
                 </div>
             )}
@@ -353,104 +404,95 @@ export function ChatInput({
                     className="min-h-[60px] max-h-[200px] resize-none border-0 bg-transparent px-4 py-3 text-sm focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground/60"
                 />
 
-                <div className="flex items-center justify-between px-3 py-2 border-t border-border/50">
+                <div className="flex items-center justify-end gap-1 px-3 py-2 border-t border-border/50">
                     <div className="flex items-center gap-1 overflow-x-hidden">
                         <ButtonWithTooltip
                             type="button"
                             variant="ghost"
                             size="sm"
-                            onClick={() => setShowClearDialog(true)}
-                            tooltipContent={dict.chat.clearConversation}
-                            className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                            onClick={() => setShowHistory(true)}
+                            disabled={isDisabled || diagramHistory.length === 0}
+                            tooltipContent={dict.chat.diagramHistory}
+                            className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
                         >
-                            <Trash2 className="h-4 w-4" />
+                            <History className="h-4 w-4" />
                         </ButtonWithTooltip>
 
-                        <ResetWarningModal
-                            open={showClearDialog}
-                            onOpenChange={setShowClearDialog}
-                            onClear={handleClear}
-                        />
-                    </div>
-
-                    <div className="flex items-center gap-1 overflow-hidden justify-end">
-                        <div className="flex items-center gap-1 overflow-x-hidden">
-                            <ButtonWithTooltip
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setShowHistory(true)}
-                                disabled={
-                                    isDisabled || diagramHistory.length === 0
-                                }
-                                tooltipContent={dict.chat.diagramHistory}
-                                className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
-                            >
-                                <History className="h-4 w-4" />
-                            </ButtonWithTooltip>
-
-                            <ButtonWithTooltip
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setShowSaveDialog(true)}
-                                disabled={isDisabled}
-                                tooltipContent={dict.chat.saveDiagram}
-                                className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
-                            >
-                                <Download className="h-4 w-4" />
-                            </ButtonWithTooltip>
-
-                            <ButtonWithTooltip
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={triggerFileInput}
-                                disabled={isDisabled}
-                                tooltipContent={dict.chat.uploadFile}
-                                className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
-                            >
-                                <ImageIcon className="h-4 w-4" />
-                            </ButtonWithTooltip>
-
-                            <input
-                                type="file"
-                                ref={fileInputRef}
-                                className="hidden"
-                                onChange={handleFileChange}
-                                accept="image/*,.pdf,application/pdf,text/*,.md,.markdown,.json,.csv,.xml,.yaml,.yml,.toml"
-                                multiple
-                                disabled={isDisabled}
-                            />
-                        </div>
-                        <ModelSelector
-                            models={models}
-                            selectedModelId={selectedModelId}
-                            onSelect={onModelSelect}
-                            onConfigure={onConfigureModels}
-                            disabled={isDisabled}
-                            showUnvalidatedModels={showUnvalidatedModels}
-                        />
-                        <div className="w-px h-5 bg-border mx-1" />
-                        <Button
-                            type="submit"
-                            disabled={isDisabled || !input.trim()}
+                        <ButtonWithTooltip
+                            type="button"
+                            variant="ghost"
                             size="sm"
-                            className="h-8 px-4 rounded-xl font-medium shadow-sm"
-                            aria-label={
-                                isDisabled ? dict.chat.sending : dict.chat.send
-                            }
+                            onClick={() => setShowSaveDialog(true)}
+                            disabled={isDisabled}
+                            tooltipContent={dict.chat.saveDiagram}
+                            className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
                         >
-                            {isDisabled ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                                <>
-                                    <Send className="h-4 w-4 mr-1.5" />
-                                    {dict.chat.send}
-                                </>
-                            )}
-                        </Button>
+                            <Download className="h-4 w-4" />
+                        </ButtonWithTooltip>
+
+                        <ButtonWithTooltip
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={triggerFileInput}
+                            disabled={isDisabled}
+                            tooltipContent={dict.chat.uploadFile}
+                            className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
+                        >
+                            <ImageIcon className="h-4 w-4" />
+                        </ButtonWithTooltip>
+
+                        {onUrlChange && (
+                            <ButtonWithTooltip
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setShowUrlDialog(true)}
+                                disabled={isDisabled}
+                                tooltipContent={dict.chat.ExtractURL}
+                                className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
+                            >
+                                <Link className="h-4 w-4" />
+                            </ButtonWithTooltip>
+                        )}
+
+                        <input
+                            type="file"
+                            ref={fileInputRef}
+                            className="hidden"
+                            onChange={handleFileChange}
+                            accept="image/*,.pdf,application/pdf,text/*,.md,.markdown,.json,.csv,.xml,.yaml,.yml,.toml"
+                            multiple
+                            disabled={isDisabled}
+                        />
                     </div>
+                    <ModelSelector
+                        models={models}
+                        selectedModelId={selectedModelId}
+                        onSelect={onModelSelect}
+                        onConfigure={onConfigureModels}
+                        disabled={isDisabled}
+                        showUnvalidatedModels={showUnvalidatedModels}
+                    />
+                    <div className="w-px h-5 bg-border mx-1" />
+                    <Button
+                        type="submit"
+                        disabled={isDisabled || !input.trim()}
+                        size="sm"
+                        className="h-8 px-4 rounded-xl font-medium shadow-sm"
+                        aria-label={
+                            isDisabled ? dict.chat.sending : dict.chat.send
+                        }
+                    >
+                        {isDisabled ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                            <>
+                                <Send className="h-4 w-4 mr-1.5" />
+                                {dict.chat.send}
+                            </>
+                        )}
+                    </Button>
                 </div>
             </div>
             <HistoryDialog
@@ -461,12 +503,25 @@ export function ChatInput({
                 open={showSaveDialog}
                 onOpenChange={setShowSaveDialog}
                 onSave={(filename, format) =>
-                    saveDiagramToFile(filename, format, sessionId)
+                    saveDiagramToFile(
+                        filename,
+                        format,
+                        sessionId,
+                        dict.save.savedSuccessfully,
+                    )
                 }
                 defaultFilename={`diagram-${new Date()
                     .toISOString()
                     .slice(0, 10)}`}
             />
+            {onUrlChange && (
+                <UrlInputDialog
+                    open={showUrlDialog}
+                    onOpenChange={setShowUrlDialog}
+                    onSubmit={handleUrlExtract}
+                    isExtracting={isExtractingUrl}
+                />
+            )}
         </form>
     )
 }
