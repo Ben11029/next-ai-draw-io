@@ -1,5 +1,5 @@
-import { Analytics } from "@vercel/analytics/next"
 import { GoogleAnalytics } from "@next/third-parties/google"
+import { Analytics } from "@vercel/analytics/next"
 import type { Metadata, Viewport } from "next"
 import { JetBrains_Mono, Plus_Jakarta_Sans } from "next/font/google"
 import { notFound } from "next/navigation"
