@@ -6,6 +6,7 @@ export type ProviderName =
     | "google"
     | "azure"
     | "bedrock"
+    | "ollama"
     | "openrouter"
     | "deepseek"
     | "siliconflow"
@@ -76,11 +77,15 @@ export const PROVIDER_INFO: Record<
     google: { label: "Google" },
     azure: { label: "Azure OpenAI" },
     bedrock: { label: "Amazon Bedrock" },
+    ollama: {
+        label: "Ollama",
+        defaultBaseUrl: "http://localhost:11434",
+    },
     openrouter: { label: "OpenRouter" },
     deepseek: { label: "DeepSeek" },
     siliconflow: {
         label: "SiliconFlow",
-        defaultBaseUrl: "https://api.siliconflow.com/v1",
+        defaultBaseUrl: "https://api.siliconflow.cn/v1",
     },
     sglang: {
         label: "SGLang",
@@ -99,7 +104,7 @@ export const PROVIDER_INFO: Record<
 }
 
 // Suggested models per provider for quick add
-export const SUGGESTED_MODELS: Record<ProviderName, string[]> = {
+export const SUGGESTED_MODELS: Partial<Record<ProviderName, string[]>> = {
     openai: [
         "gpt-5.2-pro",
         "gpt-5.2-chat-latest",
