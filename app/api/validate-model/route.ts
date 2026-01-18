@@ -3,73 +3,15 @@ import { createAnthropic } from "@ai-sdk/anthropic"
 import { createDeepSeek, deepseek } from "@ai-sdk/deepseek"
 import { createGateway } from "@ai-sdk/gateway"
 import { createGoogleGenerativeAI } from "@ai-sdk/google"
+import { createVertex } from "@ai-sdk/google-vertex"
 import { createOpenAI } from "@ai-sdk/openai"
 import { createOpenRouter } from "@openrouter/ai-sdk-provider"
 import { generateText } from "ai"
 import { NextResponse } from "next/server"
 import { createOllama } from "ollama-ai-provider-v2"
+import { allowPrivateUrls, isPrivateUrl } from "@/lib/ssrf-protection"
 
 export const runtime = "nodejs"
-
-/**
- * SECURITY: Check if URL points to private/internal network (SSRF protection)
- * Blocks: localhost, private IPs, link-local, AWS metadata service
- */
-function isPrivateUrl(urlString: string): boolean {
-    try {
-        const url = new URL(urlString)
-        const hostname = url.hostname.toLowerCase()
-
-        // Block localhost
-        if (
-            hostname === "localhost" ||
-            hostname === "127.0.0.1" ||
-            hostname === "::1"
-        ) {
-            return true
-        }
-
-        // Block AWS/cloud metadata endpoints
-        if (
-            hostname === "169.254.169.254" ||
-            hostname === "metadata.google.internal"
-        ) {
-            return true
-        }
-
-        // Check for private IPv4 ranges
-        const ipv4Match = hostname.match(
-            /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/,
-        )
-        if (ipv4Match) {
-            const [, a, b] = ipv4Match.map(Number)
-            // 10.0.0.0/8
-            if (a === 10) return true
-            // 172.16.0.0/12
-            if (a === 172 && b >= 16 && b <= 31) return true
-            // 192.168.0.0/16
-            if (a === 192 && b === 168) return true
-            // 169.254.0.0/16 (link-local)
-            if (a === 169 && b === 254) return true
-            // 127.0.0.0/8 (loopback)
-            if (a === 127) return true
-        }
-
-        // Block common internal hostnames
-        if (
-            hostname.endsWith(".local") ||
-            hostname.endsWith(".internal") ||
-            hostname.endsWith(".localhost")
-        ) {
-            return true
-        }
-
-        return false
-    } catch {
-        // Invalid URL - block it
-        return true
-    }
-}
 
 interface ValidateRequest {
     provider: string
@@ -80,6 +22,8 @@ interface ValidateRequest {
     awsAccessKeyId?: string
     awsSecretAccessKey?: string
     awsRegion?: string
+    // Vertex AI specific
+    vertexApiKey?: string // Express Mode API key
 }
 
 export async function POST(req: Request) {
@@ -93,6 +37,8 @@ export async function POST(req: Request) {
             awsAccessKeyId,
             awsSecretAccessKey,
             awsRegion,
+            // Note: Express Mode only needs vertexApiKey
+            vertexApiKey,
         } = body
 
         if (!provider || !modelId) {
@@ -103,7 +49,7 @@ export async function POST(req: Request) {
         }
 
         // SECURITY: Block SSRF attacks via custom baseUrl
-        if (baseUrl && isPrivateUrl(baseUrl)) {
+        if (baseUrl && !allowPrivateUrls && isPrivateUrl(baseUrl)) {
             return NextResponse.json(
                 { valid: false, error: "Invalid base URL" },
                 { status: 400 },
@@ -117,6 +63,16 @@ export async function POST(req: Request) {
                     {
                         valid: false,
                         error: "AWS credentials (Access Key ID, Secret Access Key, Region) are required",
+                    },
+                    { status: 400 },
+                )
+            }
+        } else if (provider === "vertexai") {
+            if (!vertexApiKey) {
+                return NextResponse.json(
+                    {
+                        valid: false,
+                        error: "Vertex AI API key is required for Express Mode",
                     },
                     { status: 400 },
                 )
@@ -155,6 +111,15 @@ export async function POST(req: Request) {
                     ...(baseUrl && { baseURL: baseUrl }),
                 })
                 model = google(modelId)
+                break
+            }
+
+            case "vertexai": {
+                const vertex = createVertex({
+                    apiKey: vertexApiKey,
+                    ...(baseUrl && { baseURL: baseUrl }),
+                })
+                model = vertex(modelId)
                 break
             }
 

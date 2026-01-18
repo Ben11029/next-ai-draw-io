@@ -207,6 +207,7 @@ See the [Next.js deployment documentation](https://nextjs.org/docs/app/building-
 -   OpenAI
 -   Anthropic
 -   Google AI
+-   Google Vertex AI
 -   Azure OpenAI
 -   Ollama
 -   OpenRouter
@@ -220,6 +221,10 @@ See the [Next.js deployment documentation](https://nextjs.org/docs/app/building-
 All providers except AWS Bedrock and OpenRouter support custom endpoints.
 
 📖 **[Detailed Provider Configuration Guide](./docs/en/ai-providers.md)** - See setup instructions for each provider.
+
+### Server-Side Multi-Model Configuration
+
+Administrators can configure multiple server-side models that are available to all users without requiring personal API keys. Configure via `AI_MODELS_CONFIG` environment variable (JSON string) or `ai-models.json` file.
 
 **Model Requirements**: This task requires strong model capabilities for generating long-form text with strict formatting constraints (draw.io XML). Recommended models include Claude Sonnet 4.5, GPT-5.1, Gemini 3 Pro, and DeepSeek V3.2/R1.
 

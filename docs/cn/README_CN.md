@@ -200,6 +200,7 @@ npm run dev
 -   OpenAI
 -   Anthropic
 -   Google AI
+-   Google Vertex AI
 -   Azure OpenAI
 -   Ollama
 -   OpenRouter
@@ -212,6 +213,10 @@ npm run dev
 除AWS Bedrock和OpenRouter外，所有提供商都支持自定义端点。
 
 📖 **[详细的提供商配置指南](./ai-providers.md)** - 查看各提供商的设置说明。
+
+### 服务端多模型配置
+
+管理员可以配置多个服务端模型，让所有用户无需提供个人 API Key 即可使用。通过 `AI_MODELS_CONFIG` 环境变量（JSON 字符串）或 `ai-models.json` 文件配置。
 
 **模型要求**：此任务需要强大的模型能力，因为它涉及生成具有严格格式约束的长文本（draw.io XML）。推荐使用 Claude Sonnet 4.5、GPT-5.1、Gemini 3 Pro 和 DeepSeek V3.2/R1。
 

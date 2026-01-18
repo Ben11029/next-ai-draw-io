@@ -27,6 +27,7 @@ import { isPdfFile, isTextFile } from "@/lib/pdf-utils"
 import { STORAGE_KEYS } from "@/lib/storage"
 import type { FlattenedModel } from "@/lib/types/model-config"
 import { extractUrlContent, type UrlData } from "@/lib/url-utils"
+import { isRealDiagram } from "@/lib/utils"
 import { FilePreviewList } from "./file-preview-list"
 
 const MAX_IMAGE_SIZE = 2 * 1024 * 1024 // 2MB
@@ -159,6 +160,9 @@ interface ChatInputProps {
     onModelSelect?: (modelId: string | undefined) => void
     showUnvalidatedModels?: boolean
     onConfigureModels?: () => void
+    // Focus control props
+    shouldFocus?: boolean
+    onFocused?: () => void
 }
 
 export function ChatInput({
@@ -178,9 +182,12 @@ export function ChatInput({
     onModelSelect = () => {},
     showUnvalidatedModels = false,
     onConfigureModels = () => {},
+    shouldFocus = false,
+    onFocused,
 }: ChatInputProps) {
     const dict = useDictionary()
     const {
+        chartXML,
         diagramHistory,
         saveDiagramToFile,
         showSaveDialog,
@@ -190,6 +197,19 @@ export function ChatInput({
     const textareaRef = useRef<HTMLTextAreaElement>(null)
     const fileInputRef = useRef<HTMLInputElement>(null)
     const [isDragging, setIsDragging] = useState(false)
+
+    // Focus the textarea when shouldFocus becomes true
+    // Use setTimeout to ensure focus happens after drawio iframe settles
+    useEffect(() => {
+        if (shouldFocus) {
+            const timer = setTimeout(() => {
+                textareaRef.current?.focus()
+                onFocused?.()
+            }, 150)
+            return () => clearTimeout(timer)
+        }
+    }, [shouldFocus, onFocused])
+
     const [showHistory, setShowHistory] = useState(false)
     const [showUrlDialog, setShowUrlDialog] = useState(false)
     const [isExtractingUrl, setIsExtractingUrl] = useState(false)
@@ -454,7 +474,7 @@ export function ChatInput({
                             variant="ghost"
                             size="sm"
                             onClick={() => setShowSaveDialog(true)}
-                            disabled={isDisabled}
+                            disabled={isDisabled || !isRealDiagram(chartXML)}
                             tooltipContent={dict.chat.saveDiagram}
                             className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
                         >

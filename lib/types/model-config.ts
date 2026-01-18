@@ -4,6 +4,7 @@ export type ProviderName =
     | "openai"
     | "anthropic"
     | "google"
+    | "vertexai"
     | "azure"
     | "bedrock"
     | "ollama"
@@ -36,6 +37,9 @@ export interface ProviderConfig {
     awsSecretAccessKey?: string
     awsRegion?: string
     awsSessionToken?: string // Optional, for temporary credentials
+    // Vertex AI specific fields
+    vertexApiKey?: string // Express Mode API key
+
     models: ModelConfig[]
     validated?: boolean // Has API key been validated
 }
@@ -50,7 +54,7 @@ export interface MultiModelConfig {
 
 // Flattened model for dropdown display
 export interface FlattenedModel {
-    id: string // Model config UUID
+    id: string // Model config UUID or synthetic server ID (e.g., "server:provider:modelId")
     modelId: string // Actual model ID
     provider: ProviderName
     providerLabel: string // Provider display name
@@ -61,7 +65,17 @@ export interface FlattenedModel {
     awsSecretAccessKey?: string
     awsRegion?: string
     awsSessionToken?: string
+    // Vertex AI specific fields
+    vertexApiKey?: string // Express Mode API key
+
     validated?: boolean // Has this model been validated
+    // Source of this model config: user-defined (client) or server-defined
+    source?: "user" | "server"
+    // Whether this model is the server default (matches AI_MODEL env var)
+    isDefault?: boolean
+    // Custom env var names for server models (allows multiple API keys per provider)
+    apiKeyEnv?: string
+    baseUrlEnv?: string
 }
 
 // Provider metadata
@@ -75,6 +89,7 @@ export const PROVIDER_INFO: Record<
         defaultBaseUrl: "https://api.anthropic.com/v1",
     },
     google: { label: "Google" },
+    vertexai: { label: "Google Vertex AI" },
     azure: { label: "Azure OpenAI" },
     bedrock: { label: "Amazon Bedrock" },
     ollama: {
@@ -156,6 +171,17 @@ export const SUGGESTED_MODELS: Partial<Record<ProviderName, string[]>> = {
         "gemini-1.5-flash",
         // Legacy
         "gemini-pro",
+    ],
+    vertexai: [
+        // Gemini 2.5 series
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+        // Gemini 2.0 series
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-exp",
+        // Gemini 1.5 series
+        "gemini-1.5-pro",
+        "gemini-1.5-flash",
     ],
     azure: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4", "gpt-35-turbo"],
     bedrock: [
@@ -288,7 +314,7 @@ export function createModelConfig(modelId: string): ModelConfig {
     }
 }
 
-// Get all models as flattened list for dropdown
+// Get all models as flattened list for dropdown (user-defined only)
 export function flattenModels(config: MultiModelConfig): FlattenedModel[] {
     const models: FlattenedModel[] = []
 
@@ -310,7 +336,12 @@ export function flattenModels(config: MultiModelConfig): FlattenedModel[] {
                 awsSecretAccessKey: provider.awsSecretAccessKey,
                 awsRegion: provider.awsRegion,
                 awsSessionToken: provider.awsSessionToken,
+                // Vertex AI fields
+                vertexApiKey: provider.vertexApiKey,
+
                 validated: model.validated,
+                source: "user",
+                isDefault: false,
             })
         }
     }

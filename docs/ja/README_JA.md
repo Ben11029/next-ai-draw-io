@@ -201,6 +201,7 @@ Next.jsアプリをデプロイする最も簡単な方法は、Next.jsの作成
 -   OpenAI
 -   Anthropic
 -   Google AI
+-   Google Vertex AI
 -   Azure OpenAI
 -   Ollama
 -   OpenRouter
@@ -213,6 +214,10 @@ Next.jsアプリをデプロイする最も簡単な方法は、Next.jsの作成
 AWS BedrockとOpenRouter以外のすべてのプロバイダーはカスタムエンドポイントをサポートしています。
 
 📖 **[詳細なプロバイダー設定ガイド](./ai-providers.md)** - 各プロバイダーの設定手順をご覧ください。
+
+### サーバーサイドマルチモデル設定
+
+管理者は、ユーザーが個人のAPIキーを提供することなく利用できる複数のサーバーサイドモデルを設定できます。`AI_MODELS_CONFIG` 環境変数（JSON文字列）または `ai-models.json` ファイルで設定します。
 
 **モデル要件**：このタスクは厳密なフォーマット制約（draw.io XML）を持つ長文テキスト生成を伴うため、強力なモデル機能が必要です。Claude Sonnet 4.5、GPT-5.1、Gemini 3 Pro、DeepSeek V3.2/R1を推奨します。
 

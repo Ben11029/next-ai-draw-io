@@ -173,6 +173,7 @@ export default function ChatPanel({
     const [dailyTokenLimit, setDailyTokenLimit] = useState(0)
     const [tpmLimit, setTpmLimit] = useState(0)
     const [minimalStyle, setMinimalStyle] = useState(false)
+    const [shouldFocusInput, setShouldFocusInput] = useState(false)
 
     // Restore input from sessionStorage on mount (when ChatPanel remounts due to key change)
     useEffect(() => {
@@ -856,6 +857,7 @@ export default function ChatPanel({
 
         // Clear UI state (can't use syncUIWithSession here because we also need to clear files)
         setMessages([])
+        setInput("")
         clearDiagram()
         setDiagramHistory([])
         handleFileChange([]) // Use handleFileChange to also clear pdfData
@@ -870,6 +872,9 @@ export default function ChatPanel({
 
         // Clear URL param to show blank state
         router.replace(window.location.pathname, { scroll: false })
+
+        // After starting a fresh chat, move focus back to the chat input
+        setShouldFocusInput(true)
     }, [
         clearDiagram,
         handleFileChange,
@@ -963,6 +968,14 @@ export default function ChatPanel({
                         ...(config.awsSessionToken && {
                             "x-aws-session-token": config.awsSessionToken,
                         }),
+                        // Vertex AI credentials (Express Mode)
+                        ...(config.vertexApiKey && {
+                            "x-vertex-api-key": config.vertexApiKey,
+                        }),
+                    }),
+                    // Send selected model ID for server model lookup (apiKeyEnv/baseUrlEnv)
+                    ...(config.selectedModelId && {
+                        "x-selected-model-id": config.selectedModelId,
                     }),
                     ...(minimalStyle && {
                         "x-minimal-style": "true",
@@ -1288,6 +1301,8 @@ export default function ChatPanel({
                     onModelSelect={modelConfig.setSelectedModelId}
                     showUnvalidatedModels={modelConfig.showUnvalidatedModels}
                     onConfigureModels={() => setShowModelConfigDialog(true)}
+                    shouldFocus={shouldFocusInput}
+                    onFocused={() => setShouldFocusInput(false)}
                 />
             </footer>
 
