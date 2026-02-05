@@ -186,7 +186,7 @@ async function handleChatRequest(req: Request): Promise<Response> {
 
     // Check if this is a server model with custom env var names
     let serverModelConfig: {
-        apiKeyEnv?: string
+        apiKeyEnv?: string | string[]
         baseUrlEnv?: string
         provider?: string
     } = {}
@@ -449,6 +449,7 @@ ${userInputText}
 
     const result = streamText({
         model,
+        abortSignal: req.signal,
         ...(process.env.MAX_OUTPUT_TOKENS && {
             maxOutputTokens: parseInt(process.env.MAX_OUTPUT_TOKENS, 10),
         }),
