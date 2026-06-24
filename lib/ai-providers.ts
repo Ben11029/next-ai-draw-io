@@ -6,18 +6,70 @@ import { createGateway, gateway } from "@ai-sdk/gateway"
 import { createGoogleGenerativeAI, google } from "@ai-sdk/google"
 import { createVertex } from "@ai-sdk/google-vertex"
 import { createOpenAI, openai } from "@ai-sdk/openai"
+import { aihubmix, createAihubmix } from "@aihubmix/ai-sdk-provider"
 import { fromNodeProviderChain } from "@aws-sdk/credential-providers"
 import { createOpenRouter } from "@openrouter/ai-sdk-provider"
 import { createOllama, ollama } from "ollama-ai-provider-v2"
-import type { ProviderName } from "@/lib/types/model-config"
+import { PROVIDER_INFO, type ProviderName } from "@/lib/types/model-config"
 
 export type { ProviderName }
+
+export const AIHUBMIX_APP_CODE = "MSBS9675"
 
 interface ModelConfig {
     model: any
     providerOptions?: any
     headers?: Record<string, string>
     modelId: string
+    provider: ProviderName
+}
+
+// Providers that only support a single system message
+export const SINGLE_SYSTEM_PROVIDERS = new Set<ProviderName>([
+    "minimax",
+    "glm",
+    "qwen",
+    "kimi",
+    "qiniu",
+    "novita",
+])
+
+/**
+ * Normalize MiniMax base URL for AI SDK compatibility.
+ * MiniMax supports Anthropic-compatible and OpenAI-compatible endpoints.
+ */
+export function normalizeMiniMaxBaseURL(rawUrl: string): {
+    baseURL: string
+    isAnthropicCompatible: boolean
+} {
+    const isAnthropicCompatible = rawUrl.includes("/anthropic")
+    let baseURL = rawUrl.replace(/\/$/, "")
+    if (isAnthropicCompatible) {
+        if (!baseURL.endsWith("/anthropic/v1")) {
+            if (baseURL.endsWith("/anthropic")) {
+                baseURL = `${baseURL}/v1`
+            } else {
+                baseURL = `${baseURL}/anthropic/v1`
+            }
+        }
+    } else {
+        if (!baseURL.endsWith("/v1")) {
+            baseURL = `${baseURL}/v1`
+        }
+    }
+    return { baseURL, isAnthropicCompatible }
+}
+
+export function isAihubmixStandardBaseURL(
+    rawUrl: string | null | undefined,
+): boolean {
+    if (!rawUrl) return true
+
+    const baseURL = rawUrl.replace(/\/+$/, "")
+    return (
+        baseURL === "https://aihubmix.com" ||
+        baseURL === "https://aihubmix.com/v1"
+    )
 }
 
 export interface ClientOverrides {
@@ -49,6 +101,7 @@ const ALLOWED_CLIENT_PROVIDERS: ProviderName[] = [
     "azure",
     "bedrock",
     "openrouter",
+    "aihubmix",
     "deepseek",
     "siliconflow",
     "sglang",
@@ -57,6 +110,12 @@ const ALLOWED_CLIENT_PROVIDERS: ProviderName[] = [
     "ollama",
     "doubao",
     "modelscope",
+    "glm",
+    "qwen",
+    "qiniu",
+    "kimi",
+    "minimax",
+    "novita",
 ]
 
 // Bedrock provider options for Anthropic beta features
@@ -470,11 +529,18 @@ function buildProviderOptions(
 
         case "deepseek":
         case "openrouter":
+        case "aihubmix":
         case "siliconflow":
         case "sglang":
         case "gateway":
         case "modelscope":
-        case "doubao": {
+        case "doubao":
+        case "minimax":
+        case "glm":
+        case "qwen":
+        case "kimi":
+        case "qiniu":
+        case "novita": {
             // These providers don't have reasoning configs in AI SDK yet
             // Gateway passes through to underlying providers which handle their own configs
             break
@@ -488,7 +554,7 @@ function buildProviderOptions(
 }
 
 // Map of provider to required environment variable
-const PROVIDER_ENV_VARS: Record<ProviderName, string | null> = {
+export const PROVIDER_ENV_VARS: Record<ProviderName, string | null> = {
     bedrock: null, // AWS SDK auto-uses IAM role on AWS, or env vars locally
     openai: "OPENAI_API_KEY",
     anthropic: "ANTHROPIC_API_KEY",
@@ -497,6 +563,7 @@ const PROVIDER_ENV_VARS: Record<ProviderName, string | null> = {
     azure: "AZURE_API_KEY",
     ollama: null, // No credentials needed for local Ollama
     openrouter: "OPENROUTER_API_KEY",
+    aihubmix: "AIHUBMIX_API_KEY",
     deepseek: "DEEPSEEK_API_KEY",
     siliconflow: "SILICONFLOW_API_KEY",
     sglang: "SGLANG_API_KEY",
@@ -504,6 +571,12 @@ const PROVIDER_ENV_VARS: Record<ProviderName, string | null> = {
     edgeone: null, // No credentials needed - uses EdgeOne Edge AI
     doubao: "DOUBAO_API_KEY",
     modelscope: "MODELSCOPE_API_KEY",
+    glm: "GLM_API_KEY",
+    qwen: "QWEN_API_KEY",
+    qiniu: "QINIU_API_KEY",
+    kimi: "KIMI_API_KEY",
+    minimax: "MINIMAX_API_KEY",
+    novita: "NOVITA_API_KEY",
 }
 
 /**
@@ -518,7 +591,15 @@ function detectProvider(): ProviderName | null {
             // Skip ollama - it doesn't require credentials
             continue
         }
-        if (process.env[envVar]) {
+        // Anthropic accepts ANTHROPIC_AUTH_TOKEN (Bearer auth) as alternative to ANTHROPIC_API_KEY
+        const hasCredential =
+            provider === "anthropic"
+                ? !!(
+                      process.env.ANTHROPIC_API_KEY ||
+                      process.env.ANTHROPIC_AUTH_TOKEN
+                  )
+                : !!process.env[envVar]
+        if (hasCredential) {
             // Azure requires additional config (baseURL or resourceName)
             if (provider === "azure") {
                 const hasBaseUrl = !!process.env.AZURE_BASE_URL
@@ -560,13 +641,26 @@ function validateProviderCredentials(
         return
     }
 
-    // Use custom env var name if provided, otherwise use default
-    const requiredVar = customApiKeyEnv || PROVIDER_ENV_VARS[provider]
-    if (requiredVar && !process.env[requiredVar]) {
-        throw new Error(
-            `${requiredVar} environment variable is required for ${provider} provider. ` +
-                `Please set it in your .env.local file.`,
+    // Anthropic accepts ANTHROPIC_AUTH_TOKEN (Bearer auth) as alternative to ANTHROPIC_API_KEY
+    if (provider === "anthropic" && !customApiKeyEnv) {
+        const hasCredential = !!(
+            process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN
         )
+        if (!hasCredential) {
+            throw new Error(
+                `Either ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN environment variable is required for anthropic provider. ` +
+                    `Please set one in your .env.local file.`,
+            )
+        }
+    } else {
+        // Use custom env var name if provided, otherwise use default
+        const requiredVar = customApiKeyEnv || PROVIDER_ENV_VARS[provider]
+        if (requiredVar && !process.env[requiredVar]) {
+            throw new Error(
+                `${requiredVar} environment variable is required for ${provider} provider. ` +
+                    `Please set it in your .env.local file.`,
+            )
+        }
     }
 
     // Azure requires either AZURE_BASE_URL or AZURE_RESOURCE_NAME in addition to API key
@@ -586,7 +680,7 @@ function validateProviderCredentials(
  * Get the AI model based on environment variables
  *
  * Environment variables:
- * - AI_PROVIDER: The provider to use (bedrock, openai, anthropic, google, azure, ollama, openrouter, deepseek, siliconflow, sglang, gateway, modelscope)
+ * - AI_PROVIDER: The provider to use (bedrock, openai, anthropic, google, azure, ollama, openrouter, aihubmix, deepseek, siliconflow, sglang, gateway, modelscope)
  * - AI_MODEL: The model ID/name for the selected provider
  *
  * Provider-specific env vars:
@@ -598,6 +692,7 @@ function validateProviderCredentials(
  * - AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY: AWS Bedrock credentials
  * - OLLAMA_BASE_URL: Ollama server URL (optional, defaults to https://ollama.com/api)
  * - OPENROUTER_API_KEY: OpenRouter API key
+ * - AIHUBMIX_API_KEY: AIHubMix API key
  * - DEEPSEEK_API_KEY: DeepSeek API key
  * - DEEPSEEK_BASE_URL: DeepSeek endpoint (optional)
  * - SILICONFLOW_API_KEY: SiliconFlow API key
@@ -634,8 +729,10 @@ export function getAIModel(overrides?: ClientOverrides): ModelConfig {
             (overrides?.provider === "vertexai" && overrides?.vertexApiKey))
     )
 
-    // Use client override if provided, otherwise fall back to env vars
-    const modelId = overrides?.modelId || process.env.AI_MODEL
+    // Use client override if provided, otherwise fall back to env vars.
+    // AI_MODEL may be comma-separated (multi-model fallback); pick the first.
+    const envModel = process.env.AI_MODEL?.split(",")[0]?.trim() || undefined
+    const modelId = overrides?.modelId || envModel
 
     if (!modelId) {
         if (isClientOverride) {
@@ -685,6 +782,7 @@ export function getAIModel(overrides?: ClientOverrides): ModelConfig {
                         `- GOOGLE_GENERATIVE_AI_API_KEY for Google\n` +
                         `- AWS_ACCESS_KEY_ID for Bedrock\n` +
                         `- OPENROUTER_API_KEY for OpenRouter\n` +
+                        `- AIHUBMIX_API_KEY for AIHubMix\n` +
                         `- AZURE_API_KEY for Azure\n` +
                         `- SILICONFLOW_API_KEY for SiliconFlow\n` +
                         `- SGLANG_API_KEY for SGLang\n` +
@@ -790,8 +888,16 @@ export function getAIModel(overrides?: ClientOverrides): ModelConfig {
                 serverBaseUrl,
                 "https://api.anthropic.com/v1",
             )
+            // Anthropic supports two auth methods (mutually exclusive):
+            // - apiKey: sends as `x-api-key` header
+            // - authToken: sends as `Authorization: Bearer <token>` header
+            // Prefer apiKey if present (including client overrides); fall back
+            // to ANTHROPIC_AUTH_TOKEN env var only when no apiKey is available.
+            const authToken = !apiKey
+                ? process.env.ANTHROPIC_AUTH_TOKEN
+                : undefined
             const customProvider = createAnthropic({
-                apiKey,
+                ...(authToken ? { authToken } : { apiKey }),
                 baseURL,
                 headers: ANTHROPIC_BETA_HEADERS,
             })
@@ -916,6 +1022,42 @@ export function getAIModel(overrides?: ClientOverrides): ModelConfig {
                 ...(baseURL && { baseURL }),
             })
             model = openrouter(modelId)
+            break
+        }
+
+        case "aihubmix": {
+            const apiKey = resolveApiKey(overrides, "AIHUBMIX_API_KEY")
+            const serverBaseUrl = resolveBaseUrlEnv(
+                overrides,
+                "AIHUBMIX_BASE_URL",
+            )
+            const baseURL = resolveBaseURL(
+                overrides?.apiKey,
+                overrides?.baseUrl,
+                serverBaseUrl,
+                PROVIDER_INFO.aihubmix.defaultBaseUrl,
+            )
+            const defaultBaseURL = PROVIDER_INFO.aihubmix.defaultBaseUrl
+
+            if (
+                isAihubmixStandardBaseURL(baseURL) ||
+                baseURL === defaultBaseURL
+            ) {
+                const aihubmixProvider =
+                    overrides?.apiKey || apiKey
+                        ? createAihubmix({
+                              apiKey,
+                              appCode: AIHUBMIX_APP_CODE,
+                          })
+                        : aihubmix
+                model = aihubmixProvider(modelId)
+            } else {
+                const aihubmixCompatibleProvider = createOpenAI({
+                    apiKey,
+                    baseURL,
+                })
+                model = aihubmixCompatibleProvider.chat(modelId)
+            }
             break
         }
 
@@ -1172,9 +1314,86 @@ export function getAIModel(overrides?: ClientOverrides): ModelConfig {
             break
         }
 
+        case "minimax": {
+            const apiKey = resolveApiKey(overrides, "MINIMAX_API_KEY")
+            const serverBaseUrl = resolveBaseUrlEnv(
+                overrides,
+                "MINIMAX_BASE_URL",
+            )
+            const rawBaseURL = resolveBaseURL(
+                overrides?.apiKey,
+                overrides?.baseUrl,
+                serverBaseUrl,
+                PROVIDER_INFO.minimax.defaultBaseUrl,
+            )
+
+            if (!rawBaseURL) {
+                throw new Error(
+                    "MiniMax base URL could not be resolved. Set MINIMAX_BASE_URL or configure a base URL in settings.",
+                )
+            }
+
+            const { baseURL, isAnthropicCompatible } =
+                normalizeMiniMaxBaseURL(rawBaseURL)
+
+            if (isAnthropicCompatible) {
+                const minimax = createAnthropic({ apiKey, baseURL })
+                model = minimax.chat(modelId)
+            } else {
+                const minimax = createOpenAI({ apiKey, baseURL })
+                model = minimax.chat(modelId)
+            }
+            break
+        }
+
+        case "glm":
+        case "qwen":
+        case "qiniu":
+        case "novita": {
+            const envVar = PROVIDER_ENV_VARS[provider]
+            if (!envVar) {
+                throw new Error(
+                    `API key environment variable not defined for provider: ${provider}`,
+                )
+            }
+            const apiKey = resolveApiKey(overrides, envVar)
+            const baseURL = resolveBaseURL(
+                overrides?.apiKey,
+                overrides?.baseUrl,
+                resolveBaseUrlEnv(
+                    overrides,
+                    `${provider.toUpperCase()}_BASE_URL`,
+                ),
+                PROVIDER_INFO[provider]?.defaultBaseUrl,
+            )
+            const customProvider = createOpenAI({
+                apiKey,
+                baseURL,
+            })
+            model = customProvider.chat(modelId)
+            break
+        }
+
+        case "kimi": {
+            const apiKey = resolveApiKey(overrides, "KIMI_API_KEY")
+            const baseURL = resolveBaseURL(
+                overrides?.apiKey,
+                overrides?.baseUrl,
+                resolveBaseUrlEnv(overrides, "KIMI_BASE_URL"),
+                PROVIDER_INFO.kimi?.defaultBaseUrl,
+            )
+            // Use createDeepSeek to properly handle reasoning_content for Kimi
+            // thinking models (e.g., kimi-k2.6). Kimi's API uses the same
+            // reasoning_content field as DeepSeek, so this provider correctly
+            // captures and replays reasoning in multi-turn conversations.
+            const customProvider = createDeepSeek({ apiKey, baseURL })
+            model = customProvider(modelId)
+            break
+        }
+
         default:
             throw new Error(
-                `Unknown AI provider: ${provider}. Supported providers: bedrock, openai, anthropic, google, azure, ollama, openrouter, deepseek, siliconflow, sglang, gateway, edgeone, doubao, modelscope`,
+                `Unknown AI provider: ${provider}. Supported providers: bedrock, openai, anthropic, google, azure, ollama, openrouter, aihubmix, deepseek, siliconflow, sglang, gateway, edgeone, doubao, modelscope, glm, qwen, qiniu, kimi, minimax, novita`,
             )
     }
 
@@ -1183,7 +1402,7 @@ export function getAIModel(overrides?: ClientOverrides): ModelConfig {
         providerOptions = customProviderOptions
     }
 
-    return { model, providerOptions, headers, modelId }
+    return { model, providerOptions, headers, modelId, provider }
 }
 
 /**
@@ -1224,19 +1443,43 @@ export function supportsImageInput(modelId: string): boolean {
         return false
     }
 
+    // Moonshot text models (moonshot-v1 series are text-only)
+    if (lowerModelId.includes("moonshot-v1") && !hasVisionIndicator) {
+        return false
+    }
+
+    // MiniMax text models (MiniMax-M2.x series are text-only; M3 supports image input)
+    if (
+        lowerModelId.includes("minimax") &&
+        !hasVisionIndicator &&
+        !lowerModelId.includes("m3")
+    ) {
+        return false
+    }
+
     // DeepSeek text models (not vision variants)
     if (lowerModelId.includes("deepseek") && !hasVisionIndicator) {
         return false
     }
 
     // Qwen text models (not vision variants like qwen-vl)
-    // qwen3.5-plus is a vision model
+    // Qwen3.5 series (qwen3.5, qwen3.5-plus, qwen3.5-flash) natively support image input
+    // QvQ (Qwen Visual QA) models are vision models — exclude them even when prefixed with "qwen/"
     if (
         lowerModelId.includes("qwen") &&
         !hasVisionIndicator &&
-        !lowerModelId.includes("qwen3.5-plus")
+        !lowerModelId.includes("qwen3.5") &&
+        !lowerModelId.includes("qvq")
     ) {
         return false
+    }
+
+    // GLM text models (not vision variants)
+    // GLM vision models: glm-4v, glm-4v-9b, glm-4.1v-9b-thinking
+    if (lowerModelId.includes("glm") && !hasVisionIndicator) {
+        if (!/[\d.]v/.test(lowerModelId)) {
+            return false
+        }
     }
 
     // Default: assume model supports images
@@ -1249,7 +1492,9 @@ export function supportsImageInput(modelId: string): boolean {
  * Throws if the model doesn't support image input.
  */
 export function getValidationModel(): ReturnType<typeof getAIModel>["model"] {
-    const modelId = process.env.VALIDATION_MODEL || process.env.AI_MODEL
+    // AI_MODEL may be comma-separated (multi-model fallback); pick the first.
+    const envFallback = process.env.AI_MODEL?.split(",")[0]?.trim() || undefined
+    const modelId = process.env.VALIDATION_MODEL || envFallback
 
     if (!modelId) {
         throw new Error(

@@ -4,6 +4,29 @@
  */
 
 import http from "node:http"
+
+const MAX_BODY_BYTES = 10 * 1024 * 1024 // 10 MiB
+
+function readBody(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    cb: (body: string) => void,
+): void {
+    let body = ""
+    let size = 0
+    req.on("data", (chunk: Buffer) => {
+        size += chunk.length
+        if (size > MAX_BODY_BYTES) {
+            res.writeHead(413, { "Content-Type": "application/json" })
+            res.end(JSON.stringify({ error: "Payload too large" }))
+            req.destroy()
+            return
+        }
+        body += chunk
+    })
+    req.on("end", () => cb(body))
+}
+
 import {
     addHistory,
     clearHistory,
@@ -70,6 +93,7 @@ interface SessionState {
     svg?: string // Cached SVG from last browser save
     syncRequested?: number // Timestamp when sync requested, cleared when browser responds
     exportFormat?: "png" | "svg" // Set by MCP tool to request browser export
+    exportXml?: string // Single-page projection to load before a page-targeted export
     exportData?: string // Base64/SVG data returned by browser after export
 }
 
@@ -94,10 +118,35 @@ export function setState(sessionId: string, xml: string, svg?: string): number {
         svg: svg || existing?.svg, // Preserve cached SVG if not provided
         syncRequested: undefined, // Clear sync request when browser pushes state
         exportFormat: existing?.exportFormat, // Preserve pending export request
+        exportXml: existing?.exportXml, // Preserve pending projection
         exportData: existing?.exportData, // Preserve export result
     })
     log.debug(`State updated: session=${sessionId}, version=${newVersion}`)
     return newVersion
+}
+
+/**
+ * Ask the browser bridge to export the current diagram as png/svg.
+ *
+ * When `projectionXml` is given (a single-page <mxfile>), the bridge loads it
+ * first, waits for draw.io's own load event, exports, then reloads the
+ * session's real document — so a page-targeted export never mutates the
+ * canonical session state and needs no fixed-delay guessing on the server.
+ *
+ * Returns false when the session is unknown. Callers should then poll
+ * `getState(sessionId)?.exportData` for the result.
+ */
+export function requestExport(
+    sessionId: string,
+    format: "png" | "svg",
+    projectionXml?: string,
+): boolean {
+    const state = stateStore.get(sessionId)
+    if (!state) return false
+    state.exportData = undefined
+    state.exportXml = projectionXml
+    state.exportFormat = format
+    return true
 }
 
 export function requestSync(sessionId: string): boolean {
@@ -155,7 +204,7 @@ export function startHttpServer(port = 6002): Promise<number> {
             }
         })
 
-        server.listen(port, () => {
+        server.listen(port, "127.0.0.1", () => {
             serverPort = port
             log.info(`HTTP server running on http://localhost:${port}`)
             resolve(port)
@@ -198,9 +247,12 @@ function handleRequest(
 ): void {
     const url = new URL(req.url || "/", `http://localhost:${serverPort}`)
 
-    res.setHeader("Access-Control-Allow-Origin", "*")
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type")
+    const requestOrigin = req.headers.origin
+    if (requestOrigin === `http://localhost:${serverPort}`) {
+        res.setHeader("Access-Control-Allow-Origin", requestOrigin)
+        res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type")
+    }
 
     if (req.method === "OPTIONS") {
         res.writeHead(204)
@@ -260,14 +312,11 @@ function handleStateApi(
                 version: state?.version || 0,
                 syncRequested: !!state?.syncRequested,
                 exportFormat: state?.exportFormat || null,
+                exportXml: state?.exportXml || null,
             }),
         )
     } else if (req.method === "POST") {
-        let body = ""
-        req.on("data", (chunk) => {
-            body += chunk
-        })
-        req.on("end", () => {
+        readBody(req, res, (body) => {
             try {
                 const data = JSON.parse(body)
                 const { sessionId } = data
@@ -283,6 +332,7 @@ function handleStateApi(
                     if (state) {
                         state.exportData = data.exportData
                         state.exportFormat = undefined
+                        state.exportXml = undefined
                         log.debug(
                             `Export data received for session=${sessionId}`,
                         )
@@ -344,11 +394,7 @@ function handleRestoreApi(
         return
     }
 
-    let body = ""
-    req.on("data", (chunk) => {
-        body += chunk
-    })
-    req.on("end", () => {
+    readBody(req, res, (body) => {
         try {
             const { sessionId, index } = JSON.parse(body)
             if (!sessionId || index === undefined) {
@@ -390,11 +436,7 @@ function handleHistorySvgApi(
         return
     }
 
-    let body = ""
-    req.on("data", (chunk) => {
-        body += chunk
-    })
-    req.on("end", () => {
+    readBody(req, res, (body) => {
         try {
             const { sessionId, svg } = JSON.parse(body)
             if (!sessionId || !svg) {
@@ -661,6 +703,8 @@ function getHtmlPage(sessionId: string): string {
         let pendingSvgExport = null;
         let pendingAiSvg = false;
         let pendingMcpExport = null; // 'png' or 'svg' when MCP requested export
+        let projectionExportActive = false; // page-targeted export: showing a transient single-page projection
+        let projectionRestoreXml = null; // the real document to reload once a projection export finishes
 
         window.addEventListener('message', (e) => {
             if (e.origin !== '${DRAWIO_ORIGIN}') return;
@@ -670,6 +714,10 @@ function getHtmlPage(sessionId: string): string {
                     isReady = true;
                     if (pendingXml) { loadDiagram(pendingXml); pendingXml = null; }
                 } else if ((msg.event === 'save' || msg.event === 'autosave') && msg.xml && msg.xml !== lastXml) {
+                    // Ignore autosave while a single-page projection is on screen
+                    // for a page-targeted export — otherwise we'd push the
+                    // transient projection back as the canonical session state.
+                    if (projectionExportActive) return;
                     // Request SVG export, then push state with SVG
                     pendingSvgExport = msg.xml;
                     iframe.contentWindow.postMessage(JSON.stringify({ action: 'export', format: 'svg' }), '*');
@@ -690,6 +738,9 @@ function getHtmlPage(sessionId: string): string {
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ sessionId, exportData: d })
                             }).catch(() => {});
+                            // Page-targeted export: restore the user's real
+                            // multi-page document now that we have the image.
+                            restoreFromProjection();
                             return;
                         }
                     }
@@ -747,6 +798,22 @@ function getHtmlPage(sessionId: string): string {
             }
         }
 
+        // Restore the user's real document after a page-targeted projection
+        // export. If we never captured one (lastXml was null at projection
+        // start), fall back to forcing a reload from the server on the next
+        // poll by rewinding currentVersion — never leave the iframe stuck on
+        // the transient projection.
+        function restoreFromProjection() {
+            if (!projectionExportActive) return;
+            projectionExportActive = false;
+            if (projectionRestoreXml) {
+                iframe.contentWindow.postMessage(JSON.stringify({ action: 'load', xml: projectionRestoreXml, autosave: 1 }), '*');
+                projectionRestoreXml = null;
+            } else {
+                currentVersion = -1; // force the next poll to reload from server
+            }
+        }
+
         async function pushState(xml, svg = '') {
             if (!sessionId) return;
             try {
@@ -772,20 +839,54 @@ function getHtmlPage(sessionId: string): string {
                     pendingSyncExport = true;
                     iframe.contentWindow.postMessage(JSON.stringify({ action: 'export', format: 'xml' }), '*');
                 }
-                // Load new diagram from server (before export, so we export latest)
-                if (s.version > currentVersion && s.xml) {
+                // Load new diagram from server (before export, so we export latest).
+                // While a page-targeted projection is on screen, skip the reload
+                // so it doesn't fight the projection — and leave currentVersion
+                // unadvanced so this bump is re-detected and applied once the
+                // real document is restored.
+                if (s.version > currentVersion && s.xml && !projectionExportActive) {
                     currentVersion = s.version;
                     loadDiagram(s.xml, true);
                 }
-                // Handle export request from MCP server (png/svg) - after version update
+                // Handle export request from MCP server (png/svg).
+                //
+                // Plain export: capture whatever tab is currently displayed.
+                //
+                // Page-targeted export: the server sends a single-page <mxfile>
+                // projection in s.exportXml. We load it into the iframe, let
+                // draw.io render it, export, then reload the user's real
+                // document — all browser-side. The canonical session state is
+                // never mutated, so there is no server-side restore race and no
+                // dependence on poll timing. autosave is suppressed while the
+                // projection is showing (see projectionExportActive guard).
                 if (s.exportFormat && !pendingMcpExport && isReady) {
                     pendingMcpExport = s.exportFormat;
-                    const exportOpts = s.exportFormat === 'png'
-                        ? { action: 'export', format: 'png', scale: 2 }
-                        : { action: 'export', format: 'svg' };
-                    iframe.contentWindow.postMessage(JSON.stringify(exportOpts), '*');
-                    // Timeout: reset if draw.io never responds
-                    setTimeout(() => { if (pendingMcpExport) { pendingMcpExport = null; } }, 8000);
+                    const fireExport = () => {
+                        const exportOpts = pendingMcpExport === 'png'
+                            ? { action: 'export', format: 'png', scale: 2 }
+                            : { action: 'export', format: 'svg' };
+                        iframe.contentWindow.postMessage(JSON.stringify(exportOpts), '*');
+                    };
+                    if (s.exportXml) {
+                        // Stash the real document so we can restore after export.
+                        projectionRestoreXml = lastXml;
+                        projectionExportActive = true;
+                        // Load the projection without touching lastXml/server state.
+                        iframe.contentWindow.postMessage(JSON.stringify({ action: 'load', xml: s.exportXml, autosave: 0 }), '*');
+                        // Let draw.io render the loaded page before exporting
+                        // (same proven settle delay as the AI-preview path).
+                        setTimeout(fireExport, 600);
+                    } else {
+                        fireExport();
+                    }
+                    // Timeout: reset if draw.io never responds, and restore the
+                    // real document if a projection was left showing.
+                    setTimeout(() => {
+                        if (pendingMcpExport) {
+                            pendingMcpExport = null;
+                            restoreFromProjection();
+                        }
+                    }, 10000);
                 }
             } catch {}
         }
@@ -825,7 +926,11 @@ function getHtmlPage(sessionId: string): string {
             saveConfirmBtn.textContent = 'Exporting...';
 
             if (format === 'drawio') {
-                // Use lastXml directly instead of requesting export (avoids race with SVG exports)
+                // Use lastXml directly instead of requesting export (avoids race with SVG exports).
+                // session.xml is canonically <mxfile> after the multi-page refactor,
+                // so no wrapper injection is needed. The legacy fallback below
+                // remains only for documents that somehow slipped past
+                // normalisation (e.g. an older session loaded from external state).
                 let xmlData = lastXml || '';
                 if (xmlData && !xmlData.includes('<mxfile')) {
                     xmlData = '<mxfile host="mcp"><diagram name="Page-1">' + xmlData + '</diagram></mxfile>';

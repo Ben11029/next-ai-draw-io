@@ -5,11 +5,18 @@ import { createGateway } from "@ai-sdk/gateway"
 import { createGoogleGenerativeAI } from "@ai-sdk/google"
 import { createVertex } from "@ai-sdk/google-vertex"
 import { createOpenAI } from "@ai-sdk/openai"
+import { createAihubmix } from "@aihubmix/ai-sdk-provider"
 import { createOpenRouter } from "@openrouter/ai-sdk-provider"
 import { generateText } from "ai"
 import { NextResponse } from "next/server"
 import { createOllama } from "ollama-ai-provider-v2"
+import {
+    AIHUBMIX_APP_CODE,
+    isAihubmixStandardBaseURL,
+    normalizeMiniMaxBaseURL,
+} from "@/lib/ai-providers"
 import { allowPrivateUrls, isPrivateUrl } from "@/lib/ssrf-protection"
+import { PROVIDER_INFO, type ProviderName } from "@/lib/types/model-config"
 
 export const runtime = "nodejs"
 
@@ -49,7 +56,7 @@ export async function POST(req: Request) {
         }
 
         // SECURITY: Block SSRF attacks via custom baseUrl
-        if (baseUrl && !allowPrivateUrls && isPrivateUrl(baseUrl)) {
+        if (baseUrl && !allowPrivateUrls() && isPrivateUrl(baseUrl)) {
             return NextResponse.json(
                 { valid: false, error: "Invalid base URL" },
                 { status: 400 },
@@ -148,6 +155,28 @@ export async function POST(req: Request) {
                     ...(baseUrl && { baseURL: baseUrl }),
                 })
                 model = openrouter(modelId)
+                break
+            }
+
+            case "aihubmix": {
+                const defaultBaseURL = PROVIDER_INFO.aihubmix.defaultBaseUrl
+
+                if (
+                    isAihubmixStandardBaseURL(baseUrl) ||
+                    baseUrl === defaultBaseURL
+                ) {
+                    const aihubmix = createAihubmix({
+                        apiKey,
+                        appCode: AIHUBMIX_APP_CODE,
+                    })
+                    model = aihubmix(modelId)
+                } else {
+                    const aihubmixCompatible = createOpenAI({
+                        apiKey,
+                        baseURL: baseUrl,
+                    })
+                    model = aihubmixCompatible.chat(modelId)
+                }
                 break
             }
 
@@ -317,6 +346,59 @@ export async function POST(req: Request) {
                     )
                     throw error
                 }
+            }
+
+            case "minimax": {
+                const rawUrl =
+                    baseUrl ||
+                    PROVIDER_INFO.minimax?.defaultBaseUrl ||
+                    "https://api.minimaxi.com/anthropic"
+                const { baseURL: minimaxBaseUrl, isAnthropicCompatible } =
+                    normalizeMiniMaxBaseURL(rawUrl)
+
+                if (isAnthropicCompatible) {
+                    const minimax = createAnthropic({
+                        apiKey,
+                        baseURL: minimaxBaseUrl,
+                    })
+                    model = minimax.chat(modelId)
+                } else {
+                    const minimax = createOpenAI({
+                        apiKey,
+                        baseURL: minimaxBaseUrl,
+                    })
+                    model = minimax.chat(modelId)
+                }
+                break
+            }
+
+            // GLM, Qwen, Kimi, Qiniu, Novita - OpenAI compatible
+            case "glm":
+            case "qwen":
+            case "kimi":
+            case "qiniu":
+            case "novita": {
+                const baseURL =
+                    baseUrl ||
+                    PROVIDER_INFO[provider as ProviderName]?.defaultBaseUrl ||
+                    ""
+
+                if (!baseURL) {
+                    return NextResponse.json(
+                        {
+                            valid: false,
+                            error: `No base URL configured for provider: ${provider}`,
+                        },
+                        { status: 400 },
+                    )
+                }
+
+                const openai = createOpenAI({
+                    apiKey,
+                    baseURL,
+                })
+                model = openai.chat(modelId)
+                break
             }
 
             default:

@@ -10,18 +10,24 @@ import {
     ResizablePanelGroup,
 } from "@/components/ui/resizable"
 import { useDiagram } from "@/contexts/diagram-context"
+import { type DrawioTheme, isDrawioTheme } from "@/lib/drawio-themes"
 import { i18n, type Locale } from "@/lib/i18n/config"
 
 export default function Home() {
-    const { drawioRef, handleDiagramExport, onDrawioLoad, resetDrawioReady } =
-        useDiagram()
+    const {
+        drawioRef,
+        handleDiagramExport,
+        handleDiagramAutoSave,
+        onDrawioLoad,
+        resetDrawioReady,
+    } = useDiagram()
     const router = useRouter()
     const pathname = usePathname()
     // Extract current language from pathname (e.g., "/zh/about" → "zh")
     const currentLang = (pathname.split("/")[1] || i18n.defaultLocale) as Locale
     const [isMobile, setIsMobile] = useState(false)
     const [isChatVisible, setIsChatVisible] = useState(true)
-    const [drawioUi, setDrawioUi] = useState<"min" | "sketch">("min")
+    const [drawioUi, setDrawioUi] = useState<DrawioTheme>("kennedy")
     const [darkMode, setDarkMode] = useState(false)
     const [isLoaded, setIsLoaded] = useState(false)
     const [isDrawioReady, setIsDrawioReady] = useState(false)
@@ -48,7 +54,7 @@ export default function Home() {
         }
 
         const savedUi = localStorage.getItem("drawio-theme")
-        if (savedUi === "min" || savedUi === "sketch") {
+        if (isDrawioTheme(savedUi)) {
             setDrawioUi(savedUi)
         }
 
@@ -93,10 +99,9 @@ export default function Home() {
         resetDrawioReady()
     }
 
-    const handleDrawioUiChange = () => {
-        const newUi = drawioUi === "min" ? "sketch" : "min"
-        localStorage.setItem("drawio-theme", newUi)
-        setDrawioUi(newUi)
+    const handleDrawioUiChange = (theme: DrawioTheme) => {
+        localStorage.setItem("drawio-theme", theme)
+        setDrawioUi(theme)
         setIsDrawioReady(false)
         resetDrawioReady()
     }
@@ -174,6 +179,8 @@ export default function Home() {
                                     <DrawIoEmbed
                                         key={`${drawioUi}-${darkMode}-${currentLang}-${isElectron}`}
                                         ref={drawioRef}
+                                        autosave
+                                        onAutoSave={handleDiagramAutoSave}
                                         onExport={handleDiagramExport}
                                         onLoad={handleDrawioLoad}
                                         baseUrl={drawioBaseUrl}
@@ -184,7 +191,8 @@ export default function Home() {
                                             saveAndExit: false,
                                             noSaveBtn: true,
                                             noExitBtn: true,
-                                            dark: darkMode,
+                                            dark:
+                                                darkMode || drawioUi === "dark",
                                             lang: currentLang,
                                             // Enable offline mode in Electron to disable external service calls
                                             ...(isElectron && {
@@ -232,7 +240,7 @@ export default function Home() {
                                 isVisible={isChatVisible}
                                 onToggleVisibility={toggleChatPanel}
                                 drawioUi={drawioUi}
-                                onToggleDrawioUi={handleDrawioUiChange}
+                                onDrawioUiChange={handleDrawioUiChange}
                                 darkMode={darkMode}
                                 onToggleDarkMode={handleDarkModeChange}
                                 isMobile={isMobile}
